@@ -161,6 +161,15 @@ type EvalConfig struct {
 	// The caller must initialize QueryStats, otherwise it isn't collected.
 	QueryStats *QueryStats
 
+	// batch contains an optional batch evaluation session, which enables
+	// deterministic shared subgraph reuse across the expressions evaluated
+	// within a single BatchEval request.
+	//
+	// It is nil for ordinary Exec calls, in which case the evaluation behavior
+	// is completely unchanged. The pointer is propagated to all the derived
+	// EvalConfig copies made during offset/@/subquery evaluation.
+	batch *batchSession
+
 	timestamps     []int64
 	timestampsOnce sync.Once
 }
@@ -182,6 +191,7 @@ func copyEvalConfig(src *EvalConfig) *EvalConfig {
 	ec.CacheTagFilters = src.CacheTagFilters
 	ec.GetRequestURI = src.GetRequestURI
 	ec.QueryStats = src.QueryStats
+	ec.batch = src.batch
 
 	// do not copy src.timestamps - they must be generated again.
 	return &ec
@@ -255,6 +265,15 @@ func getTimestamps(start, end, step int64, maxPointsPerSeries int) []int64 {
 }
 
 func evalExpr(qt *querytracer.Tracer, ec *EvalConfig, e metricsql.Expr) ([]*timeseries, error) {
+	if ec.batch != nil {
+		// Route the evaluation through the batch session, so deterministic
+		// shared subgraphs are computed only once for the whole batch request.
+		return ec.batch.evalShared(qt, ec, e)
+	}
+	return evalExprDirect(qt, ec, e)
+}
+
+func evalExprDirect(qt *querytracer.Tracer, ec *EvalConfig, e metricsql.Expr) ([]*timeseries, error) {
 	if qt.Enabled() {
 		query := string(e.AppendString(nil))
 		query = stringsutil.LimitStringLen(query, 300)
@@ -1192,7 +1211,7 @@ func evalInstantRollup(qt *querytracer.Tracer, ec *EvalConfig, funcName string, 
 		ecCopy.Start = timestamp
 		ecCopy.End = timestamp
 		pointsPerSeries := int64(1)
-		return evalRollupFuncNoCache(qt, ecCopy, funcName, rf, expr, me, iafc, window, pointsPerSeries)
+		return evalRollupFuncNoCacheFn(qt, ecCopy, funcName, rf, expr, me, iafc, window, pointsPerSeries)
 	}
 	tooBigOffset := func(offset int64) bool {
 		maxOffset := min(window/2, 1800*1000)
@@ -1739,7 +1758,7 @@ func evalRollupFuncWithMetricExpr(qt *querytracer.Tracer, ec *EvalConfig, funcNa
 	}
 	pointsPerSeries := 1 + (ec.End-ec.Start)/ec.Step
 	evalWithConfig := func(ec *EvalConfig) ([]*timeseries, error) {
-		tss, err := evalRollupFuncNoCache(qt, ec, funcName, rf, expr, me, iafc, window, pointsPerSeries)
+		tss, err := evalRollupFuncNoCacheFn(qt, ec, funcName, rf, expr, me, iafc, window, pointsPerSeries)
 		if err != nil {
 			err = &httpserver.UserReadableError{
 				Err: err,
@@ -1798,6 +1817,14 @@ func evalRollupFuncWithMetricExpr(qt *querytracer.Tracer, ec *EvalConfig, funcNa
 	rollupResultCacheV.PutSeries(qt, ec, expr, window, rvs)
 	return rvs, nil
 }
+
+// evalRollupFuncNoCacheFn is the storage-backed rollup evaluation entry point.
+//
+// It is a package-level variable instead of a direct call, so batch evaluation
+// tests could install a deterministic fake reader in order to count the actual
+// subgraph fetch work, emulate cancellation and inject failures. Production
+// code always uses the real evalRollupFuncNoCache implementation.
+var evalRollupFuncNoCacheFn = evalRollupFuncNoCache
 
 // evalRollupFuncNoCache calculates the given rf with the given lookbehind window.
 //

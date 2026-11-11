@@ -224,6 +224,15 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		return true
+	case "/api/v1/batch_query":
+		batchQueryRequests.Inc()
+		httpserver.EnableCORS(w, r)
+		if err := prometheus.BatchQueryHandler(qt, startTime, w, r); err != nil {
+			recordRequestError(r, err, batchQueryErrors)
+			httpserver.SendPrometheusError(w, r, err)
+			return true
+		}
+		return true
 	case "/api/v1/series":
 		seriesRequests.Inc()
 		httpserver.EnableCORS(w, r)
@@ -651,6 +660,9 @@ var (
 
 	queryRangeRequests = metrics.NewCounter(`vm_http_requests_total{path="/api/v1/query_range"}`)
 	queryRangeErrors   = metrics.NewCounter(`vm_http_request_errors_total{path="/api/v1/query_range"}`)
+
+	batchQueryRequests = metrics.NewCounter(`vm_http_requests_total{path="/api/v1/batch_query"}`)
+	batchQueryErrors   = metrics.NewCounter(`vm_http_request_errors_total{path="/api/v1/batch_query"}`)
 
 	seriesRequests = metrics.NewCounter(`vm_http_requests_total{path="/api/v1/series"}`)
 	seriesErrors   = metrics.NewCounter(`vm_http_request_errors_total{path="/api/v1/series"}`)

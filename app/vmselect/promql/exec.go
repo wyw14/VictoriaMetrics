@@ -68,6 +68,14 @@ func Exec(qt *querytracer.Tracer, ec *EvalConfig, q string, isFirstPointOnly boo
 	if err != nil {
 		return nil, err
 	}
+	return finalizeEvalResult(qt, ec, e, rv, isFirstPointOnly)
+}
+
+// finalizeEvalResult converts the internally evaluated timeseries into
+// netstorage.Result values applying the same post-processing as Exec:
+// optional first-point trimming, sorting, response series limit and
+// decimal digits rounding.
+func finalizeEvalResult(qt *querytracer.Tracer, ec *EvalConfig, e metricsql.Expr, rv []*timeseries, isFirstPointOnly bool) ([]netstorage.Result, error) {
 	if isFirstPointOnly {
 		// Remove all the points except the first one from every time series.
 		for _, ts := range rv {
@@ -78,12 +86,12 @@ func Exec(qt *querytracer.Tracer, ec *EvalConfig, q string, isFirstPointOnly boo
 	}
 	maySort := maySortResults(e)
 	result, err := timeseriesToResult(rv, maySort)
+	if err != nil {
+		return nil, err
+	}
 	if *maxResponseSeries > 0 && len(result) > *maxResponseSeries {
 		return nil, fmt.Errorf("the response contains more than -search.maxResponseSeries=%d time series: %d series; either increase -search.maxResponseSeries "+
 			"or change the query in order to return smaller number of series", *maxResponseSeries, len(result))
-	}
-	if err != nil {
-		return nil, err
 	}
 	if maySort {
 		qt.Printf("sort series by metric name and labels")
