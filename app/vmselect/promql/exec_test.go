@@ -6880,6 +6880,75 @@ func TestExecSuccess(t *testing.T) {
 		resultExpected := []netstorage.Result{r}
 		f(q, resultExpected)
 	})
+	t.Run(`hysteresis_count_over_time_zero_cycles`, func(t *testing.T) {
+		t.Parallel()
+		// In-band samples are valid but never complete a cycle, so the result is zero,
+		// never NaN.
+		q := `hysteresis_count_over_time(0, 10, vector(5)[5m])`
+		r := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{0, 0, 0, 0, 0, 0},
+			Timestamps: timestampsExpected,
+		}
+		resultExpected := []netstorage.Result{r}
+		f(q, resultExpected)
+	})
+	t.Run(`hysteresis_count_over_time_no_valid_samples`, func(t *testing.T) {
+		t.Parallel()
+		// The subquery path drops fully-NaN series before the rollup function runs,
+		// so the query yields no series. The NaN result for windows without valid
+		// samples itself is covered at the rollup function level.
+		q := `hysteresis_count_over_time(0, 10, vector(nan)[5m])`
+		resultExpected := []netstorage.Result{}
+		f(q, resultExpected)
+	})
+	t.Run(`hysteresis_count_over_time_subquery`, func(t *testing.T) {
+		t.Parallel()
+		q := `hysteresis_count_over_time(0, 10, vector(5)[5m:1m])`
+		r := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{0, 0, 0, 0, 0, 0},
+			Timestamps: timestampsExpected,
+		}
+		resultExpected := []netstorage.Result{r}
+		f(q, resultExpected)
+	})
+	t.Run(`hysteresis_count_over_time_offset`, func(t *testing.T) {
+		t.Parallel()
+		q := `hysteresis_count_over_time(0, 10, vector(5)[5m] offset 1m)`
+		r := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{0, 0, 0, 0, 0, 0},
+			Timestamps: timestampsExpected,
+		}
+		resultExpected := []netstorage.Result{r}
+		f(q, resultExpected)
+	})
+	t.Run(`hysteresis_count_over_time_at`, func(t *testing.T) {
+		t.Parallel()
+		q := `hysteresis_count_over_time(0, 10, vector(5)[5m] @ 1500)`
+		r := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{0, 0, 0, 0, 0, 0},
+			Timestamps: timestampsExpected,
+		}
+		resultExpected := []netstorage.Result{r}
+		f(q, resultExpected)
+	})
+	t.Run(`hysteresis_count_over_time_cycles`, func(t *testing.T) {
+		t.Parallel()
+		// Boolean 0/1 series alternating every 200s on the evaluation grid:
+		// 1,0,1,0,1,0. With low=0 and high=0.5 every 1 -> 0 transition after a
+		// high state completes exactly one cycle inside the 10m window.
+		q := `hysteresis_count_over_time(0, 0.5, ((time() % 400) >=bool 200)[10m])`
+		r := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{0, 1, 0, 1, 0, 1},
+			Timestamps: timestampsExpected,
+		}
+		resultExpected := []netstorage.Result{r}
+		f(q, resultExpected)
+	})
 	t.Run(`sum_gt_over_time`, func(t *testing.T) {
 		t.Parallel()
 		q := `round(sum_gt_over_time(rand(0)[200s:10s], 0.7), 0.1)`
@@ -10646,6 +10715,13 @@ func TestExecError(t *testing.T) {
 	f(`count_gt_over_time()`)
 	f(`count_eq_over_time()`)
 	f(`count_ne_over_time()`)
+	f(`hysteresis_count_over_time()`)
+	f(`hysteresis_count_over_time(1, 2)`)
+	f(`hysteresis_count_over_time(1, 2, 3, 4)`)
+	f(`hysteresis_count_over_time(2, 1, vector(3)[5m])`)
+	f(`hysteresis_count_over_time(1, 1, vector(3)[5m])`)
+	f(`hysteresis_count_over_time(nan, 1, vector(3)[5m])`)
+	f(`hysteresis_count_over_time(0, inf, vector(3)[5m])`)
 	f(`timezone_offset()`)
 	f(`bitmap_and()`)
 	f(`bitmap_or()`)

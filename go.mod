@@ -190,6 +190,9 @@ require (
 // remove it when otel will resolve dependency issue at https://github.com/open-telemetry/opentelemetry-collector/issues/15928
 replace github.com/gobwas/glob => github.com/gobwas/glob v0.2.3
 
+// Local build of metricsql with the hysteresis_count_over_time() rollup function.
+replace github.com/VictoriaMetrics/metricsql => ./third_party/metricsql
+
 replace (
 	github.com/prometheus/client_golang => github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_golang/exp => github.com/prometheus/client_golang/exp v0.0.0-20261003105051-2ad001aa7b44

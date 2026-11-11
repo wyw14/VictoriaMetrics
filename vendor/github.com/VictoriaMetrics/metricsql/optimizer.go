@@ -765,6 +765,9 @@ func getRollupArgIdxForOptimization(funcName string, args []Expr) int {
 		return 1
 	case "quantiles_over_time":
 		return len(args) - 1
+	case "hysteresis_count_over_time":
+		// hysteresis_count_over_time(low, high, series[window])
+		return 2
 	default:
 		return 0
 	}

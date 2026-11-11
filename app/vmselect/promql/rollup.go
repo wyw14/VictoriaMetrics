@@ -22,79 +22,80 @@ var minStalenessInterval = flag.Duration("search.minStalenessInterval", 0, "The 
 	"See also '-search.maxStalenessInterval'")
 
 var rollupFuncs = map[string]newRollupFunc{
-	"absent_over_time":        newRollupFuncOneArg(rollupAbsent),
-	"aggr_over_time":          newRollupFuncTwoArgs(rollupFake),
-	"ascent_over_time":        newRollupFuncOneArg(rollupAscentOverTime),
-	"avg_over_time":           newRollupFuncOneArg(rollupAvg),
-	"changes":                 newRollupFuncOneArg(rollupChanges),
-	"changes_prometheus":      newRollupFuncOneArg(rollupChangesPrometheus),
-	"count_eq_over_time":      newRollupCountEQ,
-	"count_gt_over_time":      newRollupCountGT,
-	"count_le_over_time":      newRollupCountLE,
-	"count_ne_over_time":      newRollupCountNE,
-	"count_over_time":         newRollupFuncOneArg(rollupCount),
-	"count_values_over_time":  newRollupCountValues,
-	"decreases_over_time":     newRollupFuncOneArg(rollupDecreases),
-	"default_rollup":          newRollupFuncOneArg(rollupDefault), // default rollup func
-	"delta":                   newRollupFuncOneArg(rollupDelta),
-	"delta_prometheus":        newRollupFuncOneArg(rollupDeltaPrometheus),
-	"deriv":                   newRollupFuncOneArg(rollupDerivSlow),
-	"deriv_fast":              newRollupFuncOneArg(rollupDerivFast),
-	"descent_over_time":       newRollupFuncOneArg(rollupDescentOverTime),
-	"distinct_over_time":      newRollupFuncOneArg(rollupDistinct),
-	"duration_over_time":      newRollupDurationOverTime,
-	"first_over_time":         newRollupFuncOneArg(rollupFirst),
-	"geomean_over_time":       newRollupFuncOneArg(rollupGeomean),
-	"histogram_over_time":     newRollupFuncOneArg(rollupHistogram),
-	"hoeffding_bound_lower":   newRollupHoeffdingBoundLower,
-	"hoeffding_bound_upper":   newRollupHoeffdingBoundUpper,
-	"holt_winters":            newRollupHoltWinters,
-	"idelta":                  newRollupFuncOneArg(rollupIdelta),
-	"ideriv":                  newRollupFuncOneArg(rollupIderiv),
-	"increase":                newRollupFuncOneArg(rollupDelta),           // + rollupFuncsRemoveCounterResets
-	"increase_prometheus":     newRollupFuncOneArg(rollupDeltaPrometheus), // + rollupFuncsRemoveCounterResets
-	"increase_pure":           newRollupFuncOneArg(rollupIncreasePure),    // + rollupFuncsRemoveCounterResets
-	"increases_over_time":     newRollupFuncOneArg(rollupIncreases),
-	"integrate":               newRollupFuncOneArg(rollupIntegrate),
-	"irate":                   newRollupFuncOneArg(rollupIderiv), // + rollupFuncsRemoveCounterResets
-	"lag":                     newRollupFuncOneArg(rollupLag),
-	"last_over_time":          newRollupFuncOneArg(rollupLast),
-	"lifetime":                newRollupFuncOneArg(rollupLifetime),
-	"mad_over_time":           newRollupFuncOneArg(rollupMAD),
-	"max_over_time":           newRollupFuncOneArg(rollupMax),
-	"median_over_time":        newRollupFuncOneArg(rollupMedian),
-	"min_over_time":           newRollupFuncOneArg(rollupMin),
-	"mode_over_time":          newRollupFuncOneArg(rollupModeOverTime),
-	"outlier_iqr_over_time":   newRollupFuncOneArg(rollupOutlierIQR),
-	"predict_linear":          newRollupPredictLinear,
-	"present_over_time":       newRollupFuncOneArg(rollupPresent),
-	"quantile_over_time":      newRollupQuantile,
-	"quantiles_over_time":     newRollupQuantiles,
-	"range_over_time":         newRollupFuncOneArg(rollupRange),
-	"rate":                    newRollupFuncOneArg(rollupDerivFast),           // + rollupFuncsRemoveCounterResets
-	"rate_prometheus":         newRollupFuncOneArg(rollupDerivFastPrometheus), // + rollupFuncsRemoveCounterResets
-	"rate_over_sum":           newRollupFuncOneArg(rollupRateOverSum),
-	"resets":                  newRollupFuncOneArg(rollupResets),
-	"rollup":                  newRollupFuncOneOrTwoArgs(rollupFake),
-	"rollup_candlestick":      newRollupFuncOneOrTwoArgs(rollupFake),
-	"rollup_delta":            newRollupFuncOneOrTwoArgs(rollupFake),
-	"rollup_deriv":            newRollupFuncOneOrTwoArgs(rollupFake),
-	"rollup_increase":         newRollupFuncOneOrTwoArgs(rollupFake), // + rollupFuncsRemoveCounterResets
-	"rollup_rate":             newRollupFuncOneOrTwoArgs(rollupFake), // + rollupFuncsRemoveCounterResets
-	"rollup_scrape_interval":  newRollupFuncOneOrTwoArgs(rollupFake),
-	"scrape_interval":         newRollupFuncOneArg(rollupScrapeInterval),
-	"share_eq_over_time":      newRollupShareEQ,
-	"share_gt_over_time":      newRollupShareGT,
-	"share_le_over_time":      newRollupShareLE,
-	"stale_samples_over_time": newRollupFuncOneArg(rollupStaleSamples),
-	"stddev_over_time":        newRollupFuncOneArg(rollupStddev),
-	"stdvar_over_time":        newRollupFuncOneArg(rollupStdvar),
-	"sum_eq_over_time":        newRollupSumEQ,
-	"sum_gt_over_time":        newRollupSumGT,
-	"sum_le_over_time":        newRollupSumLE,
-	"sum_over_time":           newRollupFuncOneArg(rollupSum),
-	"sum2_over_time":          newRollupFuncOneArg(rollupSum2),
-	"tfirst_over_time":        newRollupFuncOneArg(rollupTfirst),
+	"absent_over_time":           newRollupFuncOneArg(rollupAbsent),
+	"aggr_over_time":             newRollupFuncTwoArgs(rollupFake),
+	"ascent_over_time":           newRollupFuncOneArg(rollupAscentOverTime),
+	"avg_over_time":              newRollupFuncOneArg(rollupAvg),
+	"changes":                    newRollupFuncOneArg(rollupChanges),
+	"changes_prometheus":         newRollupFuncOneArg(rollupChangesPrometheus),
+	"count_eq_over_time":         newRollupCountEQ,
+	"count_gt_over_time":         newRollupCountGT,
+	"count_le_over_time":         newRollupCountLE,
+	"count_ne_over_time":         newRollupCountNE,
+	"count_over_time":            newRollupFuncOneArg(rollupCount),
+	"count_values_over_time":     newRollupCountValues,
+	"decreases_over_time":        newRollupFuncOneArg(rollupDecreases),
+	"default_rollup":             newRollupFuncOneArg(rollupDefault), // default rollup func
+	"delta":                      newRollupFuncOneArg(rollupDelta),
+	"delta_prometheus":           newRollupFuncOneArg(rollupDeltaPrometheus),
+	"deriv":                      newRollupFuncOneArg(rollupDerivSlow),
+	"deriv_fast":                 newRollupFuncOneArg(rollupDerivFast),
+	"descent_over_time":          newRollupFuncOneArg(rollupDescentOverTime),
+	"distinct_over_time":         newRollupFuncOneArg(rollupDistinct),
+	"duration_over_time":         newRollupDurationOverTime,
+	"first_over_time":            newRollupFuncOneArg(rollupFirst),
+	"geomean_over_time":          newRollupFuncOneArg(rollupGeomean),
+	"histogram_over_time":        newRollupFuncOneArg(rollupHistogram),
+	"hoeffding_bound_lower":      newRollupHoeffdingBoundLower,
+	"hoeffding_bound_upper":      newRollupHoeffdingBoundUpper,
+	"holt_winters":               newRollupHoltWinters,
+	"hysteresis_count_over_time": newRollupHysteresisCountOverTime,
+	"idelta":                     newRollupFuncOneArg(rollupIdelta),
+	"ideriv":                     newRollupFuncOneArg(rollupIderiv),
+	"increase":                   newRollupFuncOneArg(rollupDelta),           // + rollupFuncsRemoveCounterResets
+	"increase_prometheus":        newRollupFuncOneArg(rollupDeltaPrometheus), // + rollupFuncsRemoveCounterResets
+	"increase_pure":              newRollupFuncOneArg(rollupIncreasePure),    // + rollupFuncsRemoveCounterResets
+	"increases_over_time":        newRollupFuncOneArg(rollupIncreases),
+	"integrate":                  newRollupFuncOneArg(rollupIntegrate),
+	"irate":                      newRollupFuncOneArg(rollupIderiv), // + rollupFuncsRemoveCounterResets
+	"lag":                        newRollupFuncOneArg(rollupLag),
+	"last_over_time":             newRollupFuncOneArg(rollupLast),
+	"lifetime":                   newRollupFuncOneArg(rollupLifetime),
+	"mad_over_time":              newRollupFuncOneArg(rollupMAD),
+	"max_over_time":              newRollupFuncOneArg(rollupMax),
+	"median_over_time":           newRollupFuncOneArg(rollupMedian),
+	"min_over_time":              newRollupFuncOneArg(rollupMin),
+	"mode_over_time":             newRollupFuncOneArg(rollupModeOverTime),
+	"outlier_iqr_over_time":      newRollupFuncOneArg(rollupOutlierIQR),
+	"predict_linear":             newRollupPredictLinear,
+	"present_over_time":          newRollupFuncOneArg(rollupPresent),
+	"quantile_over_time":         newRollupQuantile,
+	"quantiles_over_time":        newRollupQuantiles,
+	"range_over_time":            newRollupFuncOneArg(rollupRange),
+	"rate":                       newRollupFuncOneArg(rollupDerivFast),           // + rollupFuncsRemoveCounterResets
+	"rate_prometheus":            newRollupFuncOneArg(rollupDerivFastPrometheus), // + rollupFuncsRemoveCounterResets
+	"rate_over_sum":              newRollupFuncOneArg(rollupRateOverSum),
+	"resets":                     newRollupFuncOneArg(rollupResets),
+	"rollup":                     newRollupFuncOneOrTwoArgs(rollupFake),
+	"rollup_candlestick":         newRollupFuncOneOrTwoArgs(rollupFake),
+	"rollup_delta":               newRollupFuncOneOrTwoArgs(rollupFake),
+	"rollup_deriv":               newRollupFuncOneOrTwoArgs(rollupFake),
+	"rollup_increase":            newRollupFuncOneOrTwoArgs(rollupFake), // + rollupFuncsRemoveCounterResets
+	"rollup_rate":                newRollupFuncOneOrTwoArgs(rollupFake), // + rollupFuncsRemoveCounterResets
+	"rollup_scrape_interval":     newRollupFuncOneOrTwoArgs(rollupFake),
+	"scrape_interval":            newRollupFuncOneArg(rollupScrapeInterval),
+	"share_eq_over_time":         newRollupShareEQ,
+	"share_gt_over_time":         newRollupShareGT,
+	"share_le_over_time":         newRollupShareLE,
+	"stale_samples_over_time":    newRollupFuncOneArg(rollupStaleSamples),
+	"stddev_over_time":           newRollupFuncOneArg(rollupStddev),
+	"stdvar_over_time":           newRollupFuncOneArg(rollupStdvar),
+	"sum_eq_over_time":           newRollupSumEQ,
+	"sum_gt_over_time":           newRollupSumGT,
+	"sum_le_over_time":           newRollupSumLE,
+	"sum_over_time":              newRollupFuncOneArg(rollupSum),
+	"sum2_over_time":             newRollupFuncOneArg(rollupSum2),
+	"tfirst_over_time":           newRollupFuncOneArg(rollupTfirst),
 	// `timestamp` function must return timestamp for the last datapoint on the current window
 	// in order to properly handle offset and timestamps unaligned to the current step.
 	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/415 for details.
@@ -553,6 +554,11 @@ type rollupFuncArg struct {
 	window int64
 
 	tsm *timeseriesMap
+
+	// hysteresisAgg carries the amortized two-stack sliding-window aggregator used by
+	// hysteresis_count_over_time(). It is created per rollupConfig.Do() call and never
+	// shared between time series, so it is safe to mutate from the rollup function.
+	hysteresisAgg *hysteresisWindowAggregator
 }
 
 func (rfa *rollupFuncArg) reset() {
@@ -564,6 +570,7 @@ func (rfa *rollupFuncArg) reset() {
 	rfa.idx = 0
 	rfa.window = 0
 	rfa.tsm = nil
+	rfa.hysteresisAgg = nil
 }
 
 // rollupFunc must return rollup value for the given rfa.
