@@ -308,8 +308,25 @@ type ScrapeConfig struct {
 	ProxyURL             *proxy.URL                  `yaml:"proxy_url,omitempty"`
 	RelabelConfigs       []promrelabel.RelabelConfig `yaml:"relabel_configs,omitempty"`
 	MetricRelabelConfigs []promrelabel.RelabelConfig `yaml:"metric_relabel_configs,omitempty"`
-	SampleLimit          int                         `yaml:"sample_limit,omitempty"`
-	LabelLimit           int                         `yaml:"label_limit,omitempty"`
+
+	// RelabelConfigFiles contains optional paths to local files with `relabel_configs`.
+	//
+	// The rules loaded from these files are appended to the inline RelabelConfigs during
+	// the config parsing. Only local files are supported; http/https urls aren't allowed.
+	// The files are read and digested as a part of the immutable scrape config generation
+	// when -promscrape.configGeneration is enabled.
+	RelabelConfigFiles []string `yaml:"relabel_config_files,omitempty"`
+
+	// MetricRelabelConfigFiles contains optional paths to local files with `metric_relabel_configs`.
+	//
+	// The rules loaded from these files are appended to the inline MetricRelabelConfigs during
+	// the config parsing. Only local files are supported; http/https urls aren't allowed.
+	// The files are read and digested as a part of the immutable scrape config generation
+	// when -promscrape.configGeneration is enabled.
+	MetricRelabelConfigFiles []string `yaml:"metric_relabel_config_files,omitempty"`
+
+	SampleLimit int `yaml:"sample_limit,omitempty"`
+	LabelLimit  int `yaml:"label_limit,omitempty"`
 
 	// This silly option is needed for compatibility with Prometheus.
 	// vmagent was supporting disable_compression option since the beginning, while Prometheus developers
