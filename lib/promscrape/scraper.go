@@ -69,6 +69,7 @@ func Init(pushData func(at *auth.Token, wr *prompb.WriteRequest)) {
 	mustInitClusterMemberID()
 	initClusterShardByLabels()
 	globalStopChan = make(chan struct{})
+	initScrapeAdmission()
 	scraperWG.Go(func() {
 		runScraper(*promscrapeConfigFile, pushData, globalStopChan)
 	})
@@ -77,6 +78,7 @@ func Init(pushData func(at *auth.Token, wr *prompb.WriteRequest)) {
 // Stop stops Prometheus scraper.
 func Stop() {
 	close(globalStopChan)
+	stopScrapeAdmission()
 	scraperWG.Wait()
 }
 
@@ -470,5 +472,6 @@ func newScraper(sw *ScrapeWork, group string, pushData func(at *auth.Token, wr *
 	sc.sw.ScrapeGroup = group
 	sc.sw.ReadData = c.ReadData
 	sc.sw.PushData = pushData
+	sc.sw.admissionStopCh = ctx.Done()
 	return sc, nil
 }

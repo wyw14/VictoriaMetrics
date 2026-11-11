@@ -257,6 +257,11 @@ type scrapeWork struct {
 	// It is reset at the beginning of every scrape and may be updated concurrently in stream parsing mode.
 	// See -promscrape.maxParseErrorsPerScrape
 	parseErrorsCount atomic.Int64
+
+	// admissionStopCh is closed when the scraper owning the scrapeWork is canceled.
+	// It bounds admission waits together with the admission-wide deadline. It may be nil
+	// in tests, in which case only the deadline applies.
+	admissionStopCh <-chan struct{}
 }
 
 // loadLastScrape appends last scrape response to dst and returns the result.
@@ -282,6 +287,11 @@ func (sw *scrapeWork) storeLastScrape(lastScrapeStr string) {
 }
 
 func (sw *scrapeWork) run(stopCh <-chan struct{}, globalStopCh <-chan struct{}) {
+	if adm := getScrapeAdmission(); adm != nil {
+		jobName := sw.Config.Job()
+		adm.JobStarted(jobName)
+		defer adm.JobStopped(jobName)
+	}
 	var randSleep uint64
 	scrapeInterval := sw.Config.ScrapeInterval
 	scrapeAlignInterval := sw.Config.ScrapeAlignInterval
@@ -349,19 +359,20 @@ func (sw *scrapeWork) run(stopCh <-chan struct{}, globalStopCh <-chan struct{}) 
 				// That's why it is a good idea to limit the number of concurrent goroutines,
 				// which may execute this code, in order to limit memory usage under high load
 				// without sacrificing the performance.
-				processScrapedDataConcurrencyLimitCh <- struct{}{}
+				releaseProcessing := sw.acquireStaleMarkersProcessing()
+				if releaseProcessing != nil {
+					// Send staleness markers to all the metrics scraped last time from the target
+					// when the given target disappears as Prometheus does.
+					// Use the current real timestamp for staleness markers, so queries
+					// stop returning data just after the time the target disappears.
+					bbLastScrape := leveledbytebufferpool.Get(sw.lastScrapeLen)
+					bbLastScrape.B = sw.loadLastScrape(bbLastScrape.B)
+					lastScrapeStr := bytesutil.ToUnsafeString(bbLastScrape.B)
+					sw.sendStaleSeries(lastScrapeStr, "", t, true)
+					leveledbytebufferpool.Put(bbLastScrape)
 
-				// Send staleness markers to all the metrics scraped last time from the target
-				// when the given target disappears as Prometheus does.
-				// Use the current real timestamp for staleness markers, so queries
-				// stop returning data just after the time the target disappears.
-				bbLastScrape := leveledbytebufferpool.Get(sw.lastScrapeLen)
-				bbLastScrape.B = sw.loadLastScrape(bbLastScrape.B)
-				lastScrapeStr := bytesutil.ToUnsafeString(bbLastScrape.B)
-				sw.sendStaleSeries(lastScrapeStr, "", t, true)
-				leveledbytebufferpool.Put(bbLastScrape)
-
-				<-processScrapedDataConcurrencyLimitCh
+					releaseProcessing()
+				}
 			}
 			if sl := sw.getSeriesLimiter(); sl != nil {
 				sl.MustStop()
@@ -406,6 +417,19 @@ func (sw *scrapeWork) logParseError(s string) {
 
 func (sw *scrapeWork) scrapeAndLogError(scrapeTimestamp, realTimestamp int64) {
 	err := sw.scrapeInternal(scrapeTimestamp, realTimestamp)
+	if errors.Is(err, errAdmissionSkipped) {
+		// An explicit admission backpressure decision is neither a target network
+		// failure nor a parsing error. The response was not downloaded and no series
+		// were processed, so up, lastScrape state, target status and stale markers
+		// must remain untouched. The skip itself is already observed via the
+		// vm_promscrape_admission_skipped_total metric. The next scrape keeps using
+		// the caller-provided timestamps unchanged.
+		if !*suppressScrapeErrors {
+			logger.Warnf("skipping scrape of %q from job %q according to the scrape processing admission: %s",
+				sw.Config.ScrapeURL, sw.Config.Job(), err)
+		}
+		return
+	}
 	if *suppressScrapeErrors {
 		return
 	}
@@ -473,7 +497,15 @@ func (sw *scrapeWork) getTargetResponse() ([]byte, error) {
 
 func (sw *scrapeWork) scrapeInternal(scrapeTimestamp, realTimestamp int64) error {
 	sw.parseErrorsCount.Store(0)
+	if adm := getScrapeAdmission(); adm != nil {
+		return sw.scrapeInternalWithAdmission(adm, scrapeTimestamp, realTimestamp)
+	}
+	return sw.scrapeInternalLegacy(scrapeTimestamp, realTimestamp)
+}
 
+// scrapeInternalLegacy keeps the original first-come-first-served processing path
+// untouched, so disabling the admission controller cannot change sampled results.
+func (sw *scrapeWork) scrapeInternalLegacy(scrapeTimestamp, realTimestamp int64) error {
 	// Read the whole scrape response into cb.
 	// It is OK to do this for stream parsing mode, since the most of RAM
 	// is occupied during parsing of the read response body below.
@@ -524,11 +556,121 @@ func (sw *scrapeWork) scrapeInternal(scrapeTimestamp, realTimestamp int64) error
 	return err
 }
 
+// admissionMinResponseEstimate is the conservative floor for response size estimates,
+// used for the first scrape of a target when the previous body size is unknown.
+const admissionMinResponseEstimate = 64 * 1024
+
+// admissionResponseEstimate returns the conservative estimated memory bytes for the
+// next response. The estimate is based on the actual decompressed size measured during
+// the previous scrape; growth beyond the estimate is handled by actual settlement and
+// by the hard single-response cap during decompression.
+func (sw *scrapeWork) admissionResponseEstimate() int64 {
+	estimate := int64(sw.prevBodyLen)
+	if estimate < admissionMinResponseEstimate {
+		estimate = admissionMinResponseEstimate
+	}
+	return estimate
+}
+
+// scrapeInternalWithAdmission separates the network download lifecycle from the
+// processing lifecycle while accounting every admitted response against the global and
+// per-job byte budgets during both phases, including the time a downloaded response
+// waits for a processing slot.
+func (sw *scrapeWork) scrapeInternalWithAdmission(adm *scrapeProcessingAdmission, scrapeTimestamp, realTimestamp int64) error {
+	// Gate 1: per-job deficit scheduling with byte budgets happens before any network
+	// activity. A rejection here means no HTTP request is made at all.
+	ticket, err := adm.Acquire(sw.admissionStopCh, sw.Config.Job(), sw.admissionResponseEstimate())
+	if err != nil {
+		return err
+	}
+	defer ticket.Release()
+
+	// Network phase: download the still-compressed response while its byte reservation
+	// is already held.
+	cb := chunkedbuffer.Get()
+	isGzipped, readErr := sw.ReadData(cb)
+
+	// Measure scrape duration.
+	endTimestamp := time.Now().UnixMilli()
+	scrapeDurationSeconds := float64(endTimestamp-realTimestamp) / 1e3
+	scrapeDuration.Update(scrapeDurationSeconds)
+
+	// Gate 2: CPU-bound processing slot. The downloaded bytes keep occupying the budget
+	// while waiting here, so responses cannot accumulate for free before parsing.
+	if err := ticket.AcquireProcessing(sw.admissionStopCh); err != nil {
+		chunkedbuffer.Put(cb)
+		return err
+	}
+
+	// The compressed chunk buffer and the decompressed body coexist briefly. Reserve the
+	// actual compressed size on top of the estimate so the in-flight peak reflects both
+	// buffers instead of pretending only the parsed body exists.
+	if err := ticket.Reserve(int64(cb.Len())); err != nil {
+		chunkedbuffer.Put(cb)
+		return err
+	}
+
+	body := leveledbytebufferpool.Get(sw.prevBodyLen)
+	if readErr == nil {
+		// gzip headers and Content-Length are not trusted: the hard cap is enforced on
+		// the actual decompressed byte stream and expansion bombs fail promptly.
+		readErr = sw.readFromBufferWithAdmissionLimit(body, cb, isGzipped, ticket.maxResponseBytes())
+	}
+	chunkedbuffer.Put(cb)
+
+	// Settle to the actual decompressed size after the compressed buffer is gone.
+	// This returns over-estimated bytes and never lets the counters go negative. A
+	// settlement failure is an admission backpressure decision, so it returns before
+	// any series are processed.
+	bodyLen := len(body.B)
+	if settleErr := ticket.Settle(int64(bodyLen)); settleErr != nil {
+		leveledbytebufferpool.Put(body)
+		return settleErr
+	}
+	sw.prevBodyLen = bodyLen
+	scrapeResponseSize.Update(float64(bodyLen))
+
+	// Network and decompression errors keep the legacy target-failure semantics via
+	// processDataOneShot (up=0 auto metrics and target status update): they are real
+	// failures of downloaded responses, unlike admission skips which never download.
+	var processErr error
+	if readErr == nil && sw.needStreamParseMode(bodyLen) {
+		// Process response body from scrape target in streaming manner.
+		// This case is optimized for targets exposing more than ten thousand of metrics per target,
+		// such as kube-state-metrics.
+		processErr = sw.processDataInStreamMode(scrapeTimestamp, realTimestamp, body, scrapeDurationSeconds)
+	} else {
+		// Process response body from scrape target at once.
+		// This case should work more optimally than stream parse for common case when scrape target exposes
+		// up to a few thousand metrics.
+		processErr = sw.processDataOneShot(scrapeTimestamp, realTimestamp, body.B, scrapeDurationSeconds, readErr)
+	}
+
+	leveledbytebufferpool.Put(body)
+
+	return processErr
+}
+
 var processScrapedDataConcurrencyLimitCh = make(chan struct{}, cgroup.AvailableCPUs())
 
 func (sw *scrapeWork) readFromBuffer(dst *bytesutil.ByteBuffer, src *chunkedbuffer.Buffer, isGzipped bool) error {
+	return sw.readFromBufferWithAdmissionLimit(dst, src, isGzipped, sw.Config.MaxScrapeSize)
+}
+
+// readFromBufferWithAdmissionLimit decompresses src into dst while hard-capping the
+// number of actual decompressed bytes at min(MaxScrapeSize, admissionLimit). The cap is
+// enforced on the decompressed stream itself rather than on any declared length.
+func (sw *scrapeWork) readFromBufferWithAdmissionLimit(dst *bytesutil.ByteBuffer, src *chunkedbuffer.Buffer, isGzipped bool, admissionLimit int64) error {
+	limit := sw.Config.MaxScrapeSize
+	if admissionLimit > 0 && admissionLimit < limit {
+		limit = admissionLimit
+	}
 	if !isGzipped {
 		src.MustWriteTo(dst)
+		if int64(dst.Len()) > limit {
+			maxScrapeSizeExceeded.Inc()
+			return fmt.Errorf("the response from %q exceeds the decompressed response size limit of %d bytes", sw.Config.ScrapeURL, limit)
+		}
 		return nil
 	}
 
@@ -538,7 +680,7 @@ func (sw *scrapeWork) readFromBuffer(dst *bytesutil.ByteBuffer, src *chunkedbuff
 		return fmt.Errorf("cannot decompress response body from %s: %w", sw.Config.ScrapeURL, err)
 	}
 
-	lr := ioutil.GetLimitedReader(reader, sw.Config.MaxScrapeSize+1)
+	lr := ioutil.GetLimitedReader(reader, limit+1)
 	_, err = dst.ReadFrom(lr)
 	ioutil.PutLimitedReader(lr)
 
@@ -547,13 +689,50 @@ func (sw *scrapeWork) readFromBuffer(dst *bytesutil.ByteBuffer, src *chunkedbuff
 		return fmt.Errorf("cannot read gzipped response body from %s: %w", sw.Config.ScrapeURL, err)
 	}
 
-	if int64(dst.Len()) > sw.Config.MaxScrapeSize {
+	if int64(dst.Len()) > limit {
 		maxScrapeSizeExceeded.Inc()
-		return fmt.Errorf("the uncompressed response from %q exceeds -promscrape.maxScrapeSize or max_scrape_size in the scrape config (%d bytes). "+
-			"Possible solutions are: reduce the response size for the target, increase -promscrape.maxScrapeSize command-line flag, "+
-			"increase max_scrape_size value in scrape config for the given target", sw.Config.ScrapeURL, sw.Config.MaxScrapeSize)
+		if limit == sw.Config.MaxScrapeSize {
+			return fmt.Errorf("the uncompressed response from %q exceeds -promscrape.maxScrapeSize or max_scrape_size in the scrape config (%d bytes). "+
+				"Possible solutions are: reduce the response size for the target, increase -promscrape.maxScrapeSize command-line flag, "+
+				"increase max_scrape_size value in scrape config for the given target", sw.Config.ScrapeURL, sw.Config.MaxScrapeSize)
+		}
+		return fmt.Errorf("the uncompressed response from %q exceeds the -promscrape.admission.maxResponseBytes limit (%d bytes); "+
+			"the gzip-declared response length is not trusted, so the response is rejected to avoid unbounded decompression memory. "+
+			"Possible solutions are: reduce the response size for the target or increase -promscrape.admission.maxResponseBytes",
+			sw.Config.ScrapeURL, limit)
 	}
 	return nil
+}
+
+// acquireStaleMarkersProcessing obtains admission for sending staleness markers when a
+// target disappears. It returns a release callback, or nil when the work is skipped.
+//
+// The scraper cancellation channel is intentionally not waited on here: a disappearing
+// target still needs its stale markers like Prometheus does, while the admission wait
+// timeout and global shutdown keep the operation bounded. A skipped scrape due to
+// backpressure never reaches this path, so stale markers are only sent for series that
+// were actually processed during previous scrapes.
+func (sw *scrapeWork) acquireStaleMarkersProcessing() func() {
+	adm := getScrapeAdmission()
+	if adm == nil {
+		processScrapedDataConcurrencyLimitCh <- struct{}{}
+		return func() {
+			<-processScrapedDataConcurrencyLimitCh
+		}
+	}
+	estimate := int64(sw.lastScrapeLen)
+	if estimate < admissionMinResponseEstimate {
+		estimate = admissionMinResponseEstimate
+	}
+	ticket, err := adm.Acquire(nil, sw.Config.Job(), estimate)
+	if err != nil {
+		return nil
+	}
+	if err := ticket.AcquireProcessing(nil); err != nil {
+		ticket.Release()
+		return nil
+	}
+	return ticket.Release
 }
 
 func (sw *scrapeWork) processDataOneShot(scrapeTimestamp, realTimestamp int64, body []byte, scrapeDurationSeconds float64, err error) error {
